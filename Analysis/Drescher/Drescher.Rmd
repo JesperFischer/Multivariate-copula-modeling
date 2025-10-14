@@ -1,0 +1,298 @@
+---
+title: "Drescher"
+output: html_document
+date: "2025-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,posterior,tidybayes,cmdstanr, furrr,futuremap,ordbetareg, future.apply)
+```
+
+## R Markdown
+
+```{r}
+df = read.csv(here::here("Data","Drescher","table.csv")) %>% 
+  filter(rt > 0.2)
+```
+
+
+```{r, fig.height=7,fig.width=10}
+
+# summarize each measure separately, then bind them
+bind_rows(
+  df %>%
+    mutate(contrast_bin = cut(contrast, 10)) %>%
+    group_by(contrast_bin) %>%
+    summarize(name = "correct",
+              mean = mean(correct),
+              se = sd(correct) / sqrt(n())),
+  
+  df %>%
+    mutate(contrast_bin = cut(contrast, 10)) %>%
+    group_by(contrast_bin,correct) %>%
+    summarize(name = "rt",
+              mean = mean(rt),
+              se = sd(rt) / sqrt(n())),
+  
+  df %>%
+    mutate(contrast_bin = cut(contrast, 10)) %>%
+    group_by(contrast_bin, correct) %>%   # <-- group by correctness only here
+    summarize(name = "responseConf",
+              mean = mean(responseConf),
+              se = sd(responseConf) / sqrt(n()))
+) %>% 
+ggplot(aes(x = contrast_bin, y = mean, ymin = mean - 2*se, ymax = mean + 2*se)) +
+  geom_pointrange(aes(color = as.factor(correct))) +   # only affects responseConf
+  facet_wrap(~name, scales = "free", ncol = 1) +
+  theme_classic(base_size = 16) +
+  labs(color = "Correct")
+
+```
+
+
+```{r, fig.height=7,fig.width=12}
+
+df = df %>% filter(subject_id < 10)
+
+
+# summarize each measure separately, then bind them
+bind_rows(
+  df %>%
+    mutate(contrast_bin = cut(contrast, 10)) %>%
+    group_by(contrast_bin, subject_id) %>%
+    summarize(name = "correct",
+              mean = mean(correct),
+              se = sd(correct) / sqrt(n())),
+  
+  df %>%
+    mutate(contrast_bin = cut(contrast, 10)) %>%
+    group_by(contrast_bin,correct,subject_id) %>%
+    summarize(name = "rt",
+              mean = mean(rt),
+              se = sd(rt) / sqrt(n())),
+  
+  df %>%
+    mutate(contrast_bin = cut(contrast, 10)) %>%
+    group_by(contrast_bin, correct,subject_id) %>%   # <-- group by correctness only here
+    summarize(name = "responseConf",
+              mean = mean(responseConf),
+              se = sd(responseConf) / sqrt(n()))
+) %>% 
+ggplot(aes(x = contrast_bin, y = mean, ymin = mean - 2*se, ymax = mean + 2*se)) +
+  geom_pointrange(aes(color = as.factor(correct))) +   # only affects responseConf
+  facet_grid(name~subject_id, scales = "free") +
+  theme_classic(base_size = 16) +
+  labs(color = "Correct")
+```
+
+# fit model
+
+```{r}
+
+df$subject_id = as.numeric(as.factor(df$subject_id))
+
+t_p_s = df %>% group_by(subject_id) %>% summarize(n = n())
+
+
+ends <- cumsum(t_p_s$n)
+
+# Calculate the start points
+starts <- c(1, head(ends, -1) + 1)
+
+mod = cmdstan_model(here::here("Stanmodels","Confidence_ACC.stan"))
+
+datastan = list(N = nrow(df),
+              S = length(unique(df$subject_id)),
+              starts = starts,
+              minRT = unique(df %>% group_by(subject_id) %>% summarize(minRT = min(rt)) %>% .$minRT),
+              ends = ends,
+              t_p_s = t_p_s$n,
+              X = df$contrast,
+              ACC = df$correct,
+              S_id = df$subject_id,
+              RT = df$rt,
+              Conf = df$responseConf/max(df$responseConf),
+              binom_y = df$correct)
+
+cor <-mod$sample(
+ data = datastan,
+  refresh = 10,
+  iter_sampling = 500,
+  iter_warmup = 500,
+  adapt_delta = 0.95,
+  max_treedepth = 12,
+  init  = 0,
+  parallel_chains = 4)
+
+```
+
+
+```{r}
+
+n_draws = 10
+workers = 15
+memory = 5000 * 1024^2
+
+parameters = c("alpha","beta","lapse","rt_int","rt_slope","rt_ndt","rt_prec",
+               "conf_int","conf_ACC","conf_entropy","conf_entropy_ACC","c0","c11","conf_prec",
+               "rho_p_rt","rho_p_conf","rho_rt_conf")
+
+
+df_param = as_draws_df(cor$draws(parameters)) %>% 
+  select(-contains(".")) %>% 
+  mutate(draw = 1:n()) %>% 
+        pivot_longer(-draw) %>% 
+        extract(name, into = c("variable", "subject_id"),
+                regex = "([a-zA-Z0-9_]+)\\[(\\d+)\\]", convert = TRUE)
+
+
+
+# First we select the number of workers and then the memory:
+plan(multisession, workers = workers)
+options(future.globals.maxSize = memory)
+
+#then the number of subjects
+subjects <- unique(df$subject_id)
+# and draws per subject
+draws <- 1:n_draws
+
+# Only use the number of draws that the user wants:
+dfq = df_param %>% filter(draw %in% draws)
+
+# function to get the draws (goes through subjects and then the draws)
+pred_list <- future_lapply(subjects, function(s) {
+lapply(draws, function(d) {
+  
+  # extract parameter vectors (mu, phi, c0 and c1) for that draw and that subject
+  params <- dfq %>%
+    filter(subject_id == s, draw == d) %>%
+    select(variable, value) %>%
+    pivot_wider(names_from = "variable", values_from = "value")
+  
+  
+  data = df %>% filter(subject_id == s)
+  
+  psycho_ACC = function(x,alpha,beta,lapse){
+    0.5+(0.5*(1-2*lapse))*((tanh(beta*(x-alpha))/2) + 0.5)
+  }
+  entropy = function(p){
+    -p * log(p) - (1-p) * log(1-p)
+  }
+  
+  x = seq(min(data$contrast), max(data$contrast), by = 0.1)
+  prob = psycho_ACC(x, params$alpha, params$beta, params$lapse)
+  
+  bin_pred = rbinom(length(prob),1,prob)
+  
+  rt_mu = params$rt_int + params$rt_slope * entropy(prob)
+  rt_ndt = params$rt_ndt
+  
+  # apply inverse logit and scale
+  RT_pred = rlnorm(length(rt_mu),rt_mu,params$rt_prec)+rt_ndt
+        
+  
+  
+  conf_dat = data.frame(prob = prob) %>% 
+    rowwise() %>% 
+    mutate(ACC = list(c(0,1))) %>% unnest()
+  
+  conf_mu = params$conf_int +
+    params$conf_ACC * conf_dat$ACC +
+    params$conf_entropy * entropy(conf_dat$prob) +
+    params$conf_entropy_ACC * conf_dat$ACC * entropy(conf_dat$prob)
+
+  # Collect the responses from the ordered beta
+  confidence_pred = data.frame()
+  for(i in 1:length(conf_mu)){
+    q = rordbeta(1, mu = brms::inv_logit_scaled(conf_mu[i]),
+                 phi = params$conf_prec,
+                 cutpoints = c(params$c0, params$c0 + exp(params$c11)))  
+    
+    dat = data.frame(pred = q, ACC = conf_dat$ACC[i])
+    
+    confidence_pred = rbind(confidence_pred, dat)
+  }
+  
+  confidence_pred =  confidence_pred %>% mutate(ACC = ifelse(ACC == 1, "Correct","Incorrect")) %>% 
+    pivot_wider(names_from = "ACC", values_from = pred) %>% unnest()
+  
+  predictions = confidence_pred %>% mutate(bin_pred = bin_pred, RT_pred = RT_pred,
+                                           x = x, draw = d, subject_id = s, prob = prob)
+  
+  
+})
+},future.seed=TRUE)
+
+
+# flatten nested list and create a tidy long dataframe
+predictions = map_dfr(pred_list, bind_rows)
+```
+
+
+
+
+
+```{r, fig.height=7, fig.width=12}
+predictions %>% 
+  ggplot() +
+  geom_line(aes(x = x, y = prob, group = draw))+
+  geom_point(aes(x = x, y = bin_pred, group = draw))+
+  facet_wrap(~subject_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+
+predictions %>% group_by(draw,subject_id) %>% summarize(p_correct = sum(bin_pred) / n()) %>% 
+  ggplot() +
+  geom_col(data = df %>% mutate(draw = NA) %>% group_by(subject_id) %>% summarize(p_correct = sum(correct) / n()),
+             aes(x = 1, y = p_correct))+
+  geom_point(aes(x = 1,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
+  facet_wrap(~subject_id, scales = "free") +
+  theme_classic(base_size = 16)
+```
+
+
+```{r, fig.height=7, fig.width=12}
+predictions %>% 
+  ggplot() +
+  geom_line(aes(x = x, y = RT_pred, group = draw))+
+  geom_point(data = df %>% mutate(draw = NA), aes(x = contrast, y = rt, group = draw))+
+  facet_wrap(~subject_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+predictions %>% 
+  ggplot() +
+  geom_histogram(data = df %>% mutate(draw = NA),
+             aes(x = rt, y = after_stat(density)),
+             position = "identity",col = "black", alpha = 0.5)+
+  geom_density(aes(x = RT_pred, group = draw), alpha = 0.5)+
+  facet_wrap(~subject_id, scales = "free") +
+  theme_classic(base_size = 16)
+```
+
+
+```{r, fig.height=7, fig.width=12}
+predictions %>% pivot_longer(cols = c("Incorrect","Correct"), values_to = "Confidence",names_to = "Correct") %>% 
+  ggplot() +
+  geom_line(aes(x = x, y = Confidence, col = (Correct), group = interaction(Correct,draw)))+
+  geom_point(data = df %>% mutate(draw = NA) %>% mutate(Correct = ifelse(correct == 1, "Correct","Incorrect")),
+             aes(x = contrast, y = responseConf / 6, col = (Correct), group = interaction(Correct,draw)))+
+  facet_wrap(~subject_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+
+
+predictions %>% 
+  pivot_longer(cols = c("Incorrect","Correct"), values_to = "Confidence",names_to = "Correct") %>% 
+  ggplot() +
+  geom_histogram(data = df %>% mutate(draw = NA) %>% mutate(Correct = ifelse(correct == 1, "Correct","Incorrect")),
+             aes(x = responseConf / 6,y = after_stat(density), fill = Correct),
+             position = "identity",col = "black", alpha = 0.5)+
+  geom_density(aes(x = Confidence, color = Correct, group = interaction(Correct,draw)), alpha = 0.5)+
+  facet_wrap(~subject_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+    
+```
+
