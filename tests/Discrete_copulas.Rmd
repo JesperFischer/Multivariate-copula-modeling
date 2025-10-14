@@ -1,5 +1,5 @@
 ---
-title: "Fitting copulas"
+title: "Discrete_copulas"
 author: "Jesper Fischer Ehmsen^1^"
 output:
   html_document:
@@ -11,14 +11,14 @@ linkcolor: blue
 always_allow_html: true
 ---
 
-# Showcase of continous non gaussian copula implementation:
+# Showcase of continous and discrete_copulas:
 
 ## load packages:
 ```{r}
 packages = c("brms","tidyverse","bayesplot",
              "pracma","here", "patchwork",
              "posterior","HDInterval",
-             "loo", "furrr","cmdstanr","mnormt")
+             "loo", "furrr","cmdstanr","mnormt","Rlab")
 
 
 do.call(pacman::p_load, as.list(packages))
@@ -30,16 +30,16 @@ register_knitr_engine(override = FALSE)
 set.seed(123)
 ```
 
-In this markdown the goal is to build on the previous markdown showcasing the trivial copula implementation of a gaussian copulas with two gaussian maginals. Here I want to extend that markdown into a gaussian copula with non-gaussian maginals.
+In this markdown the goal is to build on the previous markdowns, here i want to showcase how one can use the gaussian copula in the case of a binary and a continous maginal (say a bernoulli and gaussian).
 
 
-## The non-trivial non-gaussian continous copula.
+## The Bernoulli and Gaussian marginals with a Gaussian copula.
 
-Lets say we observe some VAS-ratings (VAS) bounded between 0 and 1 (not including the extremes to keep it simple) and response times (RT). Here we know that both response times and VAS ratings aren't following a normal distribution as RT's are positively skewed and non-negative and VAS ratings are bounded. 
+Say we observe some binary responses (0,1) and some normally distributed response times (RT). We will in the following show how we can jointly model this combination.
 
-Simulating this we will start with a Gaussian copula with correlation coefficient $\rho$, then making these draws uniform with the guassian CDF and lastly using the inverse cumulative distributions of the distribution we want our VAS and RT random variables to be drawn from (the "observed" responses). 
-We are going to do this for 3 cases, highly positive dependency $\rho = 0.8$, no dependency $\rho = 0$ and , no highly negative dependency $\rho = -0.8$. Further we assume for the marginal distributions of the VAS a beta-distribution with $\mu = 0.5$,$\phi = 20$ being the mean and precision respectively. 
-For the RT's we assume a lognormal distribution with $\mu = -0.5$ $\sigma = 0.5$
+First we want to simulate the situation and to do this we again start with a Gaussian copula with correlation coefficient $\rho$, then making these draws uniform with the guassian CDF and lastly using the inverse cumulative distributions of the distribution we want our binary responses and RT random variables to be drawn from (the "observed" responses).
+
+We are going to do this for 3 cases, highly positive dependency $\rho = 0.8$, no dependency $\rho = 0$ and , no highly negative dependency $\rho = -0.8$. For simplicity we will assume that there is a fixed probability of the binary response of being 1 i.e. $\theta = 0.7$ while for the RT's we assume a Normal distribution with $\mu = 2$ $\sigma = 0.2$
 
 
 ```{r}
@@ -50,17 +50,18 @@ get_responses = function(rho){
   df = guassians = data.frame(mnormt::rmnorm(n = 500, mean = c(0,0),
                        varcov = cbind(c(1,rho),c(rho,1)))) %>% rename(VAS = X1, RT = X2)
 
-  uni_VAS = pnorm(df$VAS)
+  uni_bin = pnorm(df$VAS)
   uni_RT = pnorm(df$RT)
 
   
-  VAS = extraDistr::qprop(uni_VAS,size = 20, mean = 0.5)
-  RT = qlnorm(uni_RT,-0.5,0.5)
+  
+  Bin = qbern(uni_bin,p = 0.7)
+  RT = qnorm(uni_RT,2,0.2)
 
-  plot_pxy = data.frame(VAS = VAS, RT = RT) %>% ggplot() + 
-    geom_point(aes(x = VAS,y = RT), size = 0.5)+
+  plot_pxy = data.frame(Bin = Bin, RT = RT) %>% ggplot() + 
+    geom_point(aes(x = Bin,y = RT), size = 0.5)+
     theme_minimal()+
-    ggtitle(paste0("p(VAS,RT) at rho = ",rho))+
+    ggtitle(paste0("p(Bin,RT) at rho = ",rho))+
      theme(
       plot.title = element_text(size = 20),  # Increase title text size
       axis.title = element_text(size = 16), # Increase axis titles text size
@@ -70,7 +71,7 @@ get_responses = function(rho){
 
 plot_pxy
 
-return(list(plot = plot_pxy, data = data.frame(VAS = VAS, RT = RT, cor = rho)))
+return(list(plot = plot_pxy, data = data.frame(Bin = Bin, RT = RT, cor = rho)))
 
 }
 

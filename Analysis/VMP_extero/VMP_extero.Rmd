@@ -195,7 +195,7 @@ ends <- cumsum(t_p_s$n)
 # Calculate the start points
 starts <- c(1, head(ends, -1) + 1)
 
-mod = cmdstan_model(here::here("Stanmodels","Confidence_Standard.stan"))
+mod = cmdstan_model(here::here("Stanmodels","Bin_RT_Standard.stan"))
 
 cor <- mod$sample(
   data = list(N = nrow(qq),
@@ -205,10 +205,8 @@ cor <- mod$sample(
               ends = ends,
               t_p_s = t_p_s$n,
               X = qq$Alpha,
-              ACC = qq$ResponseCorrect,
               S_id = qq$participant_id,
               RT = (qq$DecisionRT),
-              Conf = qq$Confidence/100,
               binom_y = qq$Decision),
   refresh = 10,
   init = 0,

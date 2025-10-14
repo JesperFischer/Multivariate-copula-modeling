@@ -225,9 +225,8 @@ functions {
 
     for (n in 1:N) {
         q[n,] = inv_Phi(u[n,]);
-        loglik[n] = multi_normal_cholesky_lpdf(to_row_vector(q[n,]) 
-                        | rep_row_vector(0, D), L)
-                     - std_normal_lpdf(to_vector(to_matrix(q[n,])));
+        loglik[n] = multi_normal_cholesky_lpdf(to_row_vector(q[n,]) | 
+                                                 rep_row_vector(0, D), L) - std_normal_lpdf(to_vector(to_matrix(q[n,])));
     }
 
     return loglik;
