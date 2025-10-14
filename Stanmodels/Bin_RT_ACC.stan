@@ -193,7 +193,7 @@ parameters {
 
   // cholesky_factor_corr[2] rho_chol;
 
-  array[S] cholesky_factor_corr[3] rho_chol;
+  array[S] cholesky_factor_corr[2] rho_chol;
 
   vector[S] c0;
   vector[S] c11;
@@ -241,11 +241,11 @@ model {
   gm[1] ~ normal(5,5); //global mean of beta
   gm[2] ~ normal(0,2); //global mean of beta
   gm[3] ~ normal(-4,1); //global mean of beta
-  gm[4:6] ~ normal(0,3); //global mean of beta
+  gm[4:6] ~ normal(0,2); //global mean of beta
 
   to_vector(z_expo) ~ std_normal();
 
-  tau_u[1] ~ normal(3 , 3);
+  tau_u[1] ~ normal(0 , 3);
   tau_u[2] ~ normal(0 , 3);
   tau_u[3] ~ normal(0 , 3);
   tau_u[4:6] ~ normal(0 , 3);

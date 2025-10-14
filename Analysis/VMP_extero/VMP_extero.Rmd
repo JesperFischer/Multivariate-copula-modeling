@@ -195,7 +195,7 @@ ends <- cumsum(t_p_s$n)
 # Calculate the start points
 starts <- c(1, head(ends, -1) + 1)
 
-mod = cmdstan_model(here::here("Stanmodels","Bin_RT_Standard.stan"))
+mod = cmdstan_model(here::here("Stanmodels","Confidence_Standard.stan"))
 
 cor <- mod$sample(
   data = list(N = nrow(qq),
@@ -221,7 +221,7 @@ cor$save_object(here::here("Saved models","VMP_extero.rds"))
 
 ```{r}
 df = qq
-n_draws = 10
+n_draws = 1000
 workers = 15
 memory = 5000 * 1024^2
 
@@ -271,7 +271,8 @@ pred_list <- future_lapply(subjects, function(s) {
       -p * log(p) - (1-p) * log(1-p)
     }
     
-    x = seq(min(data$Alpha), max(data$Alpha), by = 1)
+    x = data$Alpha
+
     prob = psycho_ACC(x, params$alpha, params$beta, params$lapse)
     
     bin_pred = rbinom(length(prob),1,prob)
@@ -286,7 +287,7 @@ pred_list <- future_lapply(subjects, function(s) {
     
     conf_dat = data.frame(prob = prob) %>% 
       rowwise() %>% 
-      mutate(ACC = list(c(0,1))) %>% unnest()
+      mutate(ACC = list(c(0,1))) %>% unnest(ACC)
     
     conf_mu = params$conf_int +
       params$conf_ACC * conf_dat$ACC +
@@ -306,7 +307,7 @@ pred_list <- future_lapply(subjects, function(s) {
     }
     
     confidence_pred =  confidence_pred %>% mutate(ACC = ifelse(ACC == 1, "Correct","Incorrect")) %>% 
-      pivot_wider(names_from = "ACC", values_from = pred) %>% unnest()
+      pivot_wider(names_from = "ACC", values_from = pred) %>% unnest(Incorrect, Correct)
     
     predictions = confidence_pred %>% mutate(bin_pred = bin_pred, RT_pred = RT_pred,
                                              x = x, draw = d, participant_id = s, prob = prob)
@@ -328,7 +329,7 @@ predictions = map_dfr(pred_list, bind_rows)
 ```{r, fig.height=7, fig.width=12}
 predictions %>% 
   ggplot() +
-  geom_line(aes(x = x, y = prob, group = draw))+
+  geom_line(aes(x = x, y = prob, group = draw), alpha = 0.1)+
   geom_point(data = df %>% mutate(draw = NA), aes(x = Alpha, y = Decision, group = draw))+
   facet_wrap(~participant_id, scales = "free") +
   theme_classic(base_size = 16)
@@ -337,9 +338,8 @@ predictions %>%
 predictions %>% group_by(draw,participant_id) %>% summarize(p_correct = sum(bin_pred) / n()) %>% 
   ggplot() +
   geom_col(data = df %>% mutate(draw = NA) %>% group_by(participant_id) %>% summarize(p_correct = sum(Decision) / n()),
-             aes(x = 1, y = p_correct))+
-  geom_point(aes(x = 1,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
-  facet_wrap(~participant_id, scales = "free") +
+             aes(x = participant_id, y = p_correct))+
+  geom_point(aes(x = participant_id,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
   theme_classic(base_size = 16)
 
 
@@ -348,9 +348,8 @@ predictions %>% group_by(draw,participant_id) %>% mutate(ResponseCorrect = ifels
   summarize(p_correct = sum(ResponseCorrect) / n()) %>% 
   ggplot() +
   geom_col(data = df %>% mutate(draw = NA) %>% group_by(participant_id) %>% summarize(p_correct = sum(ResponseCorrect) / n()),
-             aes(x = 1, y = p_correct))+
-  geom_point(aes(x = 1,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
-  facet_wrap(~participant_id, scales = "free") +
+             aes(x = participant_id, y = p_correct))+
+  geom_point(aes(x = participant_id,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
   theme_classic(base_size = 16)
 ```
 
@@ -358,33 +357,77 @@ predictions %>% group_by(draw,participant_id) %>% mutate(ResponseCorrect = ifels
 ```{r, fig.height=7, fig.width=12}
 predictions %>% 
   ggplot() +
-  geom_line(aes(x = x, y = RT_pred, group = draw))+
-  geom_point(data = df %>% mutate(draw = NA), aes(x = Alpha, y = DecisionRT, group = draw))+
+  geom_line(aes(x = x, y = RT_pred, group = draw), alpha = 0.1)+
+  geom_point(data = df %>% mutate(draw = NA), aes(x = Alpha, y = DecisionRT, group = draw), shape = 21)+
   facet_wrap(~participant_id, scales = "free") +
   theme_classic(base_size = 16)
 
 predictions %>% 
+  group_by(x,participant_id) %>% 
+  summarize(RT_pred_mean = mean(RT_pred), 
+            q20 = quantile(RT_pred,0.20), 
+            q80 = quantile(RT_pred,0.80),
+            q10 = quantile(RT_pred,0.10), 
+            q90 = quantile(RT_pred,0.90),
+            q60 = quantile(RT_pred,0.60), 
+            q40 = quantile(RT_pred,0.40)
+            ) %>% 
+  ggplot() +
+  geom_ribbon(aes(x = x, y = RT_pred_mean, ymin = q40, ymax = q60), alpha = 0.6)+
+  geom_ribbon(aes(x = x, y = RT_pred_mean, ymin = q20, ymax = q80), alpha = 0.4)+
+  geom_ribbon(aes(x = x, y = RT_pred_mean, ymin = q10, ymax = q90), alpha = 0.2)+
+  geom_line(aes(x = x, y = RT_pred_mean), alpha = 0.5)+
+  geom_point(data = df,
+             aes(x = Alpha, y = DecisionRT), shape = 21, col = "black")+
+  facet_wrap(~participant_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+
+predictions %>% filter(draw %in% sample(1:1000,10)) %>% 
   ggplot() +
   geom_histogram(data = df %>% mutate(draw = NA),
              aes(x = DecisionRT, y = after_stat(density)),
              position = "identity",col = "black", alpha = 0.5)+
-  geom_density(aes(x = RT_pred, group = draw), alpha = 0.5)+
+  geom_density(aes(x = RT_pred, group = draw), alpha = 0.01)+
   facet_wrap(~participant_id, scales = "free") +
   theme_classic(base_size = 16)
 ```
 
 
 ```{r, fig.height=7, fig.width=12}
-predictions %>% pivot_longer(cols = c("Incorrect","Correct"), values_to = "Confidence",names_to = "ResponseCorrect") %>% 
+predictions %>% filter(draw %in% sample(1:1000,10)) %>% 
+  pivot_longer(cols = c("Incorrect","Correct"), values_to = "Confidence",names_to = "ResponseCorrect") %>% 
   ggplot() +
-  geom_line(aes(x = x, y = Confidence, col = (ResponseCorrect), group = interaction(ResponseCorrect,draw)))+
+  geom_line(aes(x = x, y = Confidence, col = (ResponseCorrect), group = interaction(ResponseCorrect,draw)), alpha = 0.1)+
   geom_point(data = df %>% mutate(draw = NA) %>% mutate(ResponseCorrect = ifelse(ResponseCorrect == 1, "Correct","Incorrect")),
-             aes(x = Alpha, y = Confidence / 100, col = (ResponseCorrect), group = interaction(ResponseCorrect,draw)))+
+             aes(x = Alpha, y = Confidence / 100, fill = (ResponseCorrect), group = interaction(ResponseCorrect,draw)), shape = 21, col = "black")+
   facet_wrap(~participant_id, scales = "free") +
   theme_classic(base_size = 16)
 
 
-predictions %>% 
+predictions %>% pivot_longer(cols = c("Incorrect","Correct"), values_to = "Confidence",names_to = "ResponseCorrect") %>%
+  group_by(x,participant_id,ResponseCorrect) %>% 
+  summarize(Confidence_mean = mean(Confidence), 
+            q20 = quantile(Confidence,0.20), 
+            q80 = quantile(Confidence,0.80),
+            q10 = quantile(Confidence,0.10), 
+            q90 = quantile(Confidence,0.90),
+            q60 = quantile(Confidence,0.60), 
+            q40 = quantile(Confidence,0.40)
+            ) %>% 
+  ggplot() +
+  geom_ribbon(aes(x = x, y = Confidence_mean, ymin = q40, ymax = q60, fill = (ResponseCorrect)), alpha = 0.6)+
+  geom_ribbon(aes(x = x, y = Confidence_mean, ymin = q20, ymax = q80, fill = (ResponseCorrect)), alpha = 0.4)+
+  geom_ribbon(aes(x = x, y = Confidence_mean, ymin = q10, ymax = q90, fill = (ResponseCorrect)), alpha = 0.2)+
+  geom_line(aes(x = x, y = Confidence_mean, fill = (ResponseCorrect)), alpha = 0.5)+
+  geom_point(data = df%>% mutate(ResponseCorrect = ifelse(ResponseCorrect == 1, "Correct","Incorrect")),
+             aes(x = Alpha, y = Confidence / 100, fill = (ResponseCorrect)), shape = 21, col = "black")+
+  facet_wrap(~participant_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+
+
+predictions %>% filter(draw %in% sample(1:1000,10)) %>% 
   pivot_longer(cols = c("Incorrect","Correct"), values_to = "Confidence",names_to = "ResponseCorrect") %>% 
   ggplot() +
   geom_histogram(data = df %>% mutate(draw = NA) %>% mutate(ResponseCorrect = ifelse(ResponseCorrect == 1, "Correct","Incorrect")),

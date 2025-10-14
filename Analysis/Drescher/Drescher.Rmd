@@ -54,7 +54,7 @@ ggplot(aes(x = contrast_bin, y = mean, ymin = mean - 2*se, ymax = mean + 2*se)) 
 
 ```{r, fig.height=7,fig.width=12}
 
-df = df %>% filter(subject_id < 10)
+df = df %>% filter(subject_id < 5)
 
 
 # summarize each measure separately, then bind them
@@ -101,7 +101,7 @@ ends <- cumsum(t_p_s$n)
 # Calculate the start points
 starts <- c(1, head(ends, -1) + 1)
 
-mod = cmdstan_model(here::here("Stanmodels","Confidence_ACC.stan"))
+mod = cmdstan_model(here::here("Stanmodels","Bin_RT_ACC.stan"))
 
 datastan = list(N = nrow(df),
               S = length(unique(df$subject_id)),
@@ -110,10 +110,8 @@ datastan = list(N = nrow(df),
               ends = ends,
               t_p_s = t_p_s$n,
               X = df$contrast,
-              ACC = df$correct,
               S_id = df$subject_id,
               RT = df$rt,
-              Conf = df$responseConf/max(df$responseConf),
               binom_y = df$correct)
 
 cor <-mod$sample(
