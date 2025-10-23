@@ -190,13 +190,13 @@ parameters = c("mu_beta","prec_beta","mu","sigma","rho")
 data = rbind(data.frame(fit_corm08$summary(parameters)) %>% mutate(simulated = c(0.5,20,-0.5,0.5,-0.8), sim_cor = -0.8),
              data.frame(fit_cor0$summary(parameters)) %>% mutate(simulated = c(0.5,20,-0.5,0.5,0), sim_cor = 0),
              data.frame(fit_cor08$summary(parameters)) %>% mutate(simulated = c(0.5,20,-0.5,0.5,0.8), sim_cor = 0.8))
-      
+
 
 data %>% mutate(sim_cor = as.factor(sim_cor)) %>% ggplot(aes(x = simulated, y = mean, ymin = q5, ymax = q95, col = sim_cor))+
   geom_pointrange(position=position_dodge(width=0.01))+
   facet_wrap(~variable,scales = "free", nrow = 1)+
   theme_minimal(base_size = 16)+
-  geom_hline(aes(yintercept = simulated), data = data_plot,
+  geom_hline(aes(yintercept = simulated),
                 color = "grey70", linetype = "dashed")+
   scale_x_continuous(breaks = scales::pretty_breaks(n = 3))
 ```
