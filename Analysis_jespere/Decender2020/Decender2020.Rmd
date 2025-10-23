@@ -1,0 +1,134 @@
+---
+title: "Decender2020"
+output: html_document
+date: "2025-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,posterior,tidybayes,cmdstanr, furrr,futuremap,ordbetareg, future.apply, patchwork)
+
+
+invisible(
+  lapply(
+    list.files(here::here("Analysis", "Functions"), pattern = "\\.[Rr]$", full.names = TRUE),
+    source
+  )
+)
+```
+
+## R Markdown
+
+# Preprocesing
+
+```{r}
+df = read.delim(here::here("Data","Decender2020","rawData.txt"), sep = " ") %>% filter(practiceblocks1 == 0,
+                                                                                       practiceblocks2 == 0) %>% 
+  filter(rt > 0 & resp != -1, include == 1, block > 3) %>%
+  filter(!sub %in% c(12,15,21,29)) %>% 
+  mutate(conf = ifelse(t2duration == 0,conf+3,conf),
+         X = NULL) %>% 
+  mutate(conf = case_when(
+    sub == 7 & t2duration == 0 & conf == 4 ~ 6,
+    sub == 7 & t2duration == 0 & conf == 6 ~ 4,
+    sub == 7 & t2duration == 0 & conf == 1 ~ 6,
+    sub == 7 & t2duration == 0 & conf == 3 ~ 4,
+    TRUE ~ conf
+  )) %>% 
+  rename(
+    Confidence = conf,
+    X  = coh_single,
+    Y = cor,
+    RT = rt,
+    subject = sub
+  ) %>% mutate(Correct = Y)
+```
+
+
+```{r, fig.height=7,fig.width=10}
+
+(Group_plot(df %>% filter(t2duration == 0)) | 
+   Group_plot(df %>% filter(t2duration == 1)) | 
+   Group_plot(df %>% filter(t2duration == 2)))+ 
+  plot_layout(guides = "collect")
+```
+
+
+```{r, fig.height=7,fig.width=12}
+plot_subjects(df %>% filter(t2duration == 0),1:7)
+plot_subjects(df %>% filter(t2duration == 0),8:20)
+plot_subjects(df %>% filter(t2duration == 0),21:30)
+
+
+plot_subjects(df%>% filter(t2duration == 1),1:7)
+plot_subjects(df%>% filter(t2duration == 1),8:20)
+plot_subjects(df%>% filter(t2duration == 1),21:30)
+
+
+plot_subjects(df%>% filter(t2duration == 2),1:7)
+plot_subjects(df%>% filter(t2duration == 2),8:20)
+plot_subjects(df%>% filter(t2duration == 2),21:30)
+
+```
+
+# fit model
+
+```{r}
+
+fit0 = fit_data_copula_rt(df %>% filter(t2duration == 0),ACC = T, "RT_Decender_dur_0")
+fit1 = fit_data_copula_rt(df %>% filter(t2duration == 1),ACC = T, "RT_Decender_dur_1")
+fit2 = fit_data_copula_rt(df %>% filter(t2duration == 2),ACC = T, "RT_Decender_dur_2")
+```
+
+
+```{r}
+pred0 = Get_predictive(fit0,df %>% filter(t2duration == 0), n_draws = 10)
+pred1 = Get_predictive(fit1,df %>% filter(t2duration == 1), n_draws = 10)
+pred2 = Get_predictive(fit2,df %>% filter(t2duration == 2), n_draws = 10)
+```
+
+
+
+
+
+
+```{r, fig.height=7, fig.width=12}
+bin_0 = Plot_bin(pred0,df %>% filter(t2duration == 0))
+bin_1 = Plot_bin(pred1,df %>% filter(t2duration == 1))
+bin_2 = Plot_bin(pred2,df %>% filter(t2duration == 2))
+
+bin_0[[1]]+ggtitle("t2_0")
+bin_1[[1]]+ggtitle("t2_1")
+bin_2[[1]]+ggtitle("t2_2")
+
+
+bin_0[[2]]+ggtitle("t2_0")
+bin_1[[2]]+ggtitle("t2_1")
+bin_2[[2]]+ggtitle("t2_2")
+
+```
+
+
+```{r, fig.height=7, fig.width=12}
+rt_0 = Plot_RT(pred0,df %>% filter(t2duration == 0))
+rt_1 = Plot_RT(pred1,df %>% filter(t2duration == 1))
+rt_2 = Plot_RT(pred2,df %>% filter(t2duration == 2))
+rt_0[[1]]+ggtitle("t2_0")
+rt_1[[1]]+ggtitle("t2_1")
+rt_2[[1]]+ggtitle("t2_2")
+
+
+rt_0[[2]]+ggtitle("t2_0")
+rt_1[[2]]+ggtitle("t2_1")
+rt_2[[2]]+ggtitle("t2_2")
+
+
+rt_0[[3]]+ggtitle("t2_0")
+rt_1[[3]]+ggtitle("t2_1")
+rt_2[[3]]+ggtitle("t2_2")
+```
+
+
+
+

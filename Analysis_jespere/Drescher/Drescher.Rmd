@@ -1,0 +1,170 @@
+---
+title: "Drescher"
+output: html_document
+date: "2025-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,posterior,tidybayes,cmdstanr, furrr,futuremap,ordbetareg, future.apply)
+
+invisible(
+  lapply(
+    list.files(here::here("Analysis", "Functions"), pattern = "\\.[Rr]$", full.names = TRUE),
+    source
+  )
+)
+```
+
+## R Markdown
+
+```{r}
+df = read.csv(here::here("Data","Drescher","table.csv")) %>% 
+  filter(rt > 0.2) %>% 
+    rename(
+    Confidence = responseConf,
+    X  = contrast,
+    Y = correct,
+    RT = rt,
+    subject = subject_id
+  ) %>% 
+  mutate(Correct = Y)
+```
+
+
+```{r, fig.height=7,fig.width=10}
+
+Group_plot(df, bin = F)
+Group_plot(df, bin = 10)
+
+```
+
+
+```{r, fig.height=7,fig.width=12}
+
+plot_subjects(df,1:10, bin = 5)
+plot_subjects(df,11:20, bin = 5)
+plot_subjects(df,21:30, bin = 5)
+plot_subjects(df,31:40, bin = 5)
+plot_subjects(df,41:50, bin = 5)
+plot_subjects(df,51:60, bin = 5)
+plot_subjects(df,60:70, bin = 5)
+
+```
+
+# fit model
+
+```{r}
+
+fit = fit_data_copula_rt(df,ACC = T,"RT_Drescher")
+
+```
+
+
+```{r}
+pred = Get_predictive(fit,df, n_draws = 10)
+```
+
+
+
+
+
+```{r, fig.height=7, fig.width=12}
+
+bin = Plot_bin(pred,df)
+
+bin[[1]]
+bin[[2]]
+
+```
+
+
+
+
+```{r, fig.height=7, fig.width=12}
+rt = Plot_RT(pred,df)
+
+rt[[1]]
+rt[[2]]
+rt[[3]]
+```
+
+```{r}
+corr_draws <- fit$draws("correlation_matrix")
+
+corr_df = as_draws_df(corr_draws) %>% select(-contains("."))
+param_names <- c("alpha", "beta", "lapse", "rt_int", "rt_slope", "rt_prec")
+P <- length(param_names)
+
+# 4. Rename the correlation matrix elements for readability
+colnames(corr_df) <- paste0("corr[", rep(param_names, each = P), ",", rep(param_names, times = P), "]")
+
+# 5. Convert to long format and keep upper-triangular unique pairs
+corr_long <- corr_df %>% 
+  select(starts_with("corr[")) %>% 
+  mutate(draw = 1:n()) %>% 
+  pivot_longer(
+    -draw,
+    names_to = c("param1", "param2"),
+    names_pattern = "corr\\[(.*),(.*)\\]",
+    values_to = "r"
+  )
+
+
+# Keep only unique (lower-triangle) parameter pairs
+corr_long_unique <- corr_long %>%
+  # filter(param1 != param2) %>%
+  mutate(
+    # Define factor levels in your chosen order
+    param1 = factor(param1, levels = param_names),
+    param2 = factor(param2, levels = param_names)
+  ) %>% mutate(r = ifelse(param1 == param2,NA,r))
+
+# Make a grid facet layout resembling a lower triangle
+ggplot(corr_long_unique, aes(x = r)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  facet_grid(rows = vars(param1), cols = vars(param2), switch = "both") +
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "Posterior correlations (lower triangle layout)",
+    x = "Correlation (r)",
+    y = "Count"
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(size = 10),
+    panel.spacing = unit(0.5, "lines")
+  )# Get the posterior mean correlation matrix
+```
+
+
+```{r}
+mat <- posterior::as_draws_matrix(corr_draws)
+
+mean_corr <- apply(mat, 2, function(x) mean(x))
+sd_corr <- apply(mat, 2, function(x) sd(x))
+q5_corr <- apply(mat, 2, function(x) quantile(x, 0.05))
+q95_corr <- apply(mat, 2, function(x) quantile(x, 0.95))
+
+# Convert vectorized form to matrix if needed
+P <- 6
+corr_mat_mean <- matrix(mean_corr, nrow = P, ncol = P, byrow = TRUE)
+colnames(corr_mat_mean) <- rownames(corr_mat_mean) <- c("alpha", "beta", "lapse", "rt_int", "rt_slope", "rt_prec")
+
+corr_mat_q5 <- matrix(q5_corr, nrow = P, ncol = P, byrow = TRUE)
+colnames(corr_mat_q5) <- rownames(corr_mat_q5) <- c("alpha", "beta", "lapse", "rt_int", "rt_slope", "rt_prec")
+
+corr_mat_q95 <- matrix(q95_corr, nrow = P, ncol = P, byrow = TRUE)
+colnames(corr_mat_q95) <- rownames(corr_mat_q95) <- c("alpha", "beta", "lapse", "rt_int", "rt_slope", "rt_prec")
+
+# View as a table
+round(corr_mat_mean, 2)
+round(corr_mat_q5, 2)
+round(corr_mat_q95, 2)
+
+
+
+```
+

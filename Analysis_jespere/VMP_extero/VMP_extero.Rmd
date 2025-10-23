@@ -1,0 +1,342 @@
+---
+title: "VMP_extero"
+output: html_document
+date: "2025-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,posterior,tidybayes,cmdstanr, furrr,futuremap,ordbetareg, future.apply)
+```
+
+## R Markdown
+
+```{r}
+df = read.csv(here::here("Data","VMP_extero","raw_hrd.csv")) %>% 
+  filter(session == 1) %>% 
+  mutate(DecisionRT = as.numeric(DecisionRT),
+         Confidence = as.numeric(Confidence),
+         ResponseCorrect = as.numeric(ifelse(ResponseCorrect == "1",1,
+                                             ifelse(ResponseCorrect == "1.0",1,
+                                                    ifelse(ResponseCorrect == "True",1,
+                                                           ifelse(ResponseCorrect == "0",0,
+                                                                  ifelse(ResponseCorrect == "0.0",0,
+                                                                         ifelse(ResponseCorrect == "False",0,NA))))))),
+         Decision = ifelse(Decision == "More",1,ifelse(Decision == "Less",0,NA))) %>% 
+  mutate(participant_id = as.numeric(as.factor(participant_id))) %>%
+  filter(DecisionRT < 8 & DecisionRT > 0.1)%>% 
+  select(ResponseCorrect,participant_id,DecisionRT,Decision, Confidence, ConfidenceRT,Modality, Alpha)  %>% drop_na()
+
+
+minRT = df %>% group_by(participant_id) %>% summarize(minRT = min(DecisionRT))
+
+df1 = inner_join(df,minRT) %>% 
+  filter(Modality == "Extero")
+```
+
+
+```{r, fig.width=10,fig.height=7}
+df1 %>% mutate(DecisionRT = log(DecisionRT), Confidence = Confidence/100) %>% 
+  pivot_longer(cols = c("Decision","DecisionRT","Confidence")) %>% 
+  # filter(abs(Alpha)<25) %>% 
+  group_by(Alpha, name) %>% 
+  summarize(mean = mean(value), se = sd(value)/sqrt(n())) %>% 
+  ggplot(aes(x = Alpha, y = mean, col = name))+
+  geom_pointrange(aes(ymin = mean-2*se,ymax = mean+2*se))+
+  theme_minimal()
+# facet_wrap(~participant_id)
+```
+
+
+```{r, fig.width=10,fig.height=7}
+df1 %>% mutate(DecisionRT = log(DecisionRT), Confidence = Confidence/100) %>% 
+  filter(participant_id < 5) %>% 
+  pivot_longer(cols = c("Decision","DecisionRT","Confidence")) %>% 
+  # filter(abs(Alpha)<25) %>% 
+  group_by(Alpha, name,participant_id) %>% 
+  summarize(mean = mean(value), se = sd(value)/sqrt(n())) %>% 
+  ggplot(aes(x = Alpha, y = mean, col = name))+
+  geom_point()+
+  theme_minimal()+
+  facet_wrap(~participant_id)+
+  geom_smooth()
+```
+
+
+```{r, fig.width=10,fig.height=7}
+
+
+
+# summarize each measure separately, then bind them
+bind_rows(
+  df1 %>%
+      filter(abs(Alpha)<25) %>%
+      group_by(Alpha) %>% 
+      summarize(name = "ResponseCorrect",
+              mean = mean(Decision),
+              se = sd(Decision) / sqrt(n())),
+  
+  df1 %>%
+      filter(abs(Alpha)<25) %>%
+      group_by(Alpha,ResponseCorrect) %>% 
+      summarize(name = "rt",
+              mean = mean(DecisionRT),
+              se = sd(DecisionRT) / sqrt(n())),
+  
+  df1 %>%
+      filter(abs(Alpha)<25) %>%
+      group_by(Alpha,ResponseCorrect) %>%
+      summarize(name = "Confidence",
+              mean = mean(Confidence),
+              se = sd(Confidence) / sqrt(n()))
+) %>% 
+  ggplot(aes(x = Alpha, y = mean, ymin = mean - 2*se, ymax = mean + 2*se)) +
+  geom_pointrange(aes(color = as.factor(ResponseCorrect))) +   # only affects responseConf
+  facet_wrap(~name, scales = "free", ncol = 1) +
+  theme_classic(base_size = 16) +
+  theme(legend.position = "top",
+      text = element_text(size = 16),        # General text size
+      axis.title = element_text(size = 18), # Axis titles
+      axis.text = element_text(size = 14),  # Axis tick labels
+      plot.title = element_text(size = 20)  # Plot title)
+)+
+  labs(color = "Correct")
+  
+
+
+```
+
+# bad subjects
+```{r, fig.width=10,fig.height=7}
+remover = function(df){
+  avg_acc = df %>% group_by(participant_id) %>% summarize(mean = mean(ResponseCorrect)) %>% mutate(se = NA, measure = "correct") 
+  avg_rt = df %>% group_by(participant_id) %>% summarize(mean = mean(DecisionRT), se = sd(DecisionRT)/sqrt(n())) %>% mutate(measure = "rt")
+  avg_conf = df %>% group_by(participant_id) %>% summarize(mean = mean(Confidence), se = sd(Confidence)/sqrt(n())) %>% mutate(measure = "confidence")
+  avg_confrt = df %>% mutate(ConfidenceRT = as.numeric(ConfidenceRT)) %>% 
+    group_by(participant_id) %>% summarize(mean = mean(ConfidenceRT, na.rm = T), se = sd(ConfidenceRT)/sqrt(n())) %>% mutate(measure = "confidencert")
+  
+  
+  outliers = rbind(avg_acc,avg_rt,avg_conf,avg_confrt) %>% group_by(measure) %>% summarize(meann = mean(mean), se = sd(mean, na.rm = T)) %>%
+    mutate(low_int = meann - 2*se,high_int = meann + 2*se) %>% mutate(se = NULL) 
+  
+  dd = inner_join(rbind(avg_acc,avg_rt,avg_conf,avg_confrt),outliers, by = "measure") %>% 
+    mutate(outlier = ifelse(mean < low_int | mean > high_int,1,0))
+  
+  
+  inner_join(rbind(avg_acc,avg_rt,avg_conf,avg_confrt),outliers, by = "measure") %>% 
+    mutate(outlier = ifelse(mean < low_int | mean > high_int,1,0)) %>% 
+    ggplot(aes(x = participant_id, y = mean, ymin = mean-se, ymax = mean+se, col = as.factor(outlier)))+
+    facet_wrap(~measure, scales = "free")+theme_minimal()+geom_pointrange()
+  
+  return(badids = dd %>% filter(measure == "correct" & outlier == 1) %>% .$participant_id)
+}
+
+
+removes = remover(df1)
+
+df1 %>% filter(participant_id %in% removes) %>% 
+  group_by(Alpha,participant_id) %>% summarize(pfaster = mean(Decision), se = sd(Decision)/sqrt(n())) %>% 
+  ggplot(aes(x = Alpha, y = pfaster,ymin = pfaster-2*se, ymax = pfaster+2*se))+geom_pointrange()+facet_wrap(~participant_id)
+```
+
+```{r}
+removers = c("9","16","44","253","258","270","293","295","307","321","392","465","541")
+```
+
+
+
+```{r, fig.width=10,fig.height=7}
+df1 %>% filter(!participant_id %in% removes) %>% 
+  mutate(DecisionRT = log(DecisionRT), Confidence = Confidence/100) %>% 
+  pivot_longer(cols = c("Decision","DecisionRT","Confidence")) %>% 
+  # filter(abs(Alpha)<25) %>% 
+  group_by(Alpha, name) %>% 
+  summarize(mean = mean(value), se = sd(value)/sqrt(n())) %>% 
+  ggplot(aes(x = Alpha, y = mean, col = name))+
+  geom_pointrange(aes(ymin = mean-2*se,ymax = mean+2*se))+
+  theme_minimal()
+# facet_wrap(~participant_id)
+
+
+df1 %>% filter(!participant_id %in% removes )%>% 
+  mutate(DecisionRT = log(DecisionRT), Confidence = Confidence/100) %>% 
+  pivot_longer(cols = c("Decision","DecisionRT","Confidence")) %>% 
+  filter(abs(Alpha)<25) %>%
+  group_by(Alpha, name) %>% 
+  summarize(mean = mean(value), se = sd(value)/sqrt(n())) %>% 
+  ggplot(aes(x = Alpha, y = mean, col = name))+
+  geom_pointrange(aes(ymin = mean-2*se,ymax = mean+2*se))+
+  theme_minimal()+
+  facet_grid(name~1,scales = "free")+
+  theme(legend.position = "top",
+        text = element_text(size = 16),        # General text size
+        axis.title = element_text(size = 18), # Axis titles
+        axis.text = element_text(size = 14),  # Axis tick labels
+        plot.title = element_text(size = 20)  # Plot title)
+  )
+```
+
+
+```{r, fig.width=10,fig.height=7}
+qq = df1 %>% filter(participant_id < 30) %>% filter(!participant_id %in% removes) %>% mutate(participant_id = as.numeric(as.factor(participant_id)))
+
+
+t_p_s = qq %>% group_by(participant_id) %>% summarize(n = n())
+
+
+ends <- cumsum(t_p_s$n)
+
+# Calculate the start points
+starts <- c(1, head(ends, -1) + 1)
+
+mod = cmdstan_model(here::here("Stanmodels","Bin_RT_Standard.stan"))
+
+cor <- mod$sample(
+  data = list(N = nrow(qq),
+              S = length(unique(qq$participant_id)),
+              starts = starts,
+              minRT = unique(qq %>% group_by(participant_id) %>% summarize(minRT = min(DecisionRT)) %>% .$minRT),
+              ends = ends,
+              t_p_s = t_p_s$n,
+              X = qq$Alpha,
+              S_id = qq$participant_id,
+              RT = (qq$DecisionRT),
+              binom_y = qq$Decision),
+  refresh = 10,
+  init = 0,
+  iter_sampling = 500,
+  iter_warmup = 500,
+  adapt_delta = 0.95,
+  parallel_chains = 4)
+
+cor$save_object(here::here("Saved models","VMP_extero.rds"))
+
+```
+
+```{r}
+df = qq
+n_draws = 50
+workers = 15
+memory = 5000 * 1024^2
+
+parameters = c("alpha","beta","lapse","rt_int","rt_slope","rt_stim","rt_ndt","rt_prec",
+               "rho_p_rt")
+
+
+df_param = as_draws_df(cor$draws(parameters)) %>% 
+  select(-contains(".")) %>% 
+  mutate(draw = 1:n()) %>% 
+        pivot_longer(-draw) %>% 
+        extract(name, into = c("variable", "subject_id"),
+                regex = "([a-zA-Z0-9_]+)\\[(\\d+)\\]", convert = TRUE)
+
+
+
+# First we select the number of workers and then the memory:
+plan(multisession, workers = workers)
+options(future.globals.maxSize = memory)
+
+#then the number of subjects
+subjects <- unique(df$participant_id)
+# and draws per subject
+draws <- 1:n_draws
+
+# Only use the number of draws that the user wants:
+dfq = df_param %>% filter(draw %in% draws)
+
+# function to get the draws (goes through subjects and then the draws)
+pred_list <- future_lapply(subjects, function(s) {
+  lapply(draws, function(d) {
+    
+    # extract parameter vectors (mu, phi, c0 and c1) for that draw and that subject
+    params <- dfq %>%
+      filter(subject_id == s, draw == d) %>%
+      select(variable, value) %>%
+      pivot_wider(names_from = "variable", values_from = "value")
+    
+    
+    data = df %>% filter(participant_id == s)
+    
+    psycho_ACC = function(x,alpha,beta,lapse){
+      lapse + (1 - 2 * lapse)*((tanh(beta*(x-alpha))/2) + 0.5)
+    }
+    entropy = function(p){
+      -p * log(p) - (1-p) * log(1-p)
+    }
+    
+    x = data$Alpha
+    prob = psycho_ACC(x, params$alpha, params$beta, params$lapse)
+    
+    bin_pred = rbinom(length(prob),1,prob)
+    
+    rt_mu = params$rt_int + params$rt_slope * entropy(prob) + params$rt_stim * x
+    rt_ndt = params$rt_ndt
+    
+    # apply inverse logit and scale
+    RT_pred = rlnorm(length(rt_mu),rt_mu,params$rt_prec)+rt_ndt
+          
+
+    predictions = data.frame(bin_pred = bin_pred, RT_pred = RT_pred,
+                                             x = x, draw = d, participant_id = s, prob = prob)
+    
+    return(predictions)
+  })
+},future.seed=TRUE)
+
+
+# flatten nested list and create a tidy long dataframe
+predictions = map_dfr(pred_list, bind_rows)
+```
+
+
+
+
+
+
+```{r, fig.height=7, fig.width=12}
+predictions %>% 
+  ggplot() +
+  geom_line(aes(x = x, y = prob, group = draw))+
+  geom_point(data = df %>% mutate(draw = NA), aes(x = Alpha, y = Decision, group = draw))+
+  facet_wrap(~participant_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+
+predictions %>% group_by(draw,participant_id) %>% summarize(p_correct = sum(bin_pred) / n()) %>% 
+  ggplot() +
+  geom_col(data = df %>% mutate(draw = NA) %>% group_by(participant_id) %>% summarize(p_correct = sum(Decision) / n()),
+             aes(x = participant_id, y = p_correct))+
+  geom_point(aes(x = participant_id,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
+  theme_classic(base_size = 16)
+
+
+predictions %>% group_by(draw,participant_id) %>% mutate(ResponseCorrect = ifelse((x > 0 & bin_pred == 1), 1,
+                                                                                  ifelse((x < 0 & bin_pred == 0),1,0))) %>% 
+  summarize(p_correct = sum(ResponseCorrect) / n()) %>% 
+  ggplot() +
+  geom_col(data = df %>% mutate(draw = NA) %>% group_by(participant_id) %>% summarize(p_correct = sum(ResponseCorrect) / n()),
+             aes(x = participant_id, y = p_correct))+
+  geom_point(aes(x = participant_id,y = p_correct, group = draw), position = position_dodge(width = 0.1), alpha = 0.5)+
+  theme_classic(base_size = 16)
+```
+
+
+```{r, fig.height=7, fig.width=12}
+predictions %>% 
+  ggplot() +
+  geom_line(aes(x = x, y = RT_pred, group = draw),alpha = 0.1)+
+  geom_point(data = df %>% mutate(draw = NA), aes(x = Alpha, y = DecisionRT, group = draw), shape = 21)+
+  facet_wrap(~participant_id, scales = "free") +
+  theme_classic(base_size = 16)
+
+predictions %>% 
+  ggplot() +
+  geom_histogram(data = df %>% mutate(draw = NA),
+             aes(x = DecisionRT, y = after_stat(density)),
+             position = "identity",col = "black", alpha = 0.5)+
+  geom_density(aes(x = RT_pred, group = draw), alpha = 0.1)+
+  facet_wrap(~participant_id, scales = "free") +
+  theme_classic(base_size = 16)
+```
+
