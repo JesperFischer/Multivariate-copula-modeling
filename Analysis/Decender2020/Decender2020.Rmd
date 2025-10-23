@@ -61,8 +61,6 @@ ggplot(aes(x = coh_single, y = mean, ymin = mean - 2*se, ymax = mean + 2*se)) +
 
 ```{r, fig.height=7,fig.width=12}
 
-df = df %>% filter(sub < 4 & t2duration == 0)
-
 
 bind_rows(
   df %>%
@@ -104,7 +102,7 @@ ends <- cumsum(t_p_s$n)
 # Calculate the start points
 starts <- c(1, head(ends, -1) + 1)
 
-mod = cmdstan_model(here::here("Stanmodels","Confidence_ACC.stan"))
+mod = cmdstan_model(here::here("Stanmodels","Bin_RT_ACC.stan"))
 
 datastan = list(N = nrow(df),
               S = length(unique(df$sub)),
@@ -128,6 +126,181 @@ cor <-mod$sample(
   max_treedepth = 12,
   init  = 0,
   parallel_chains = 4)
+
+```
+
+
+```{r}
+df0 = df %>% filter(t2duration == 0)
+
+df0 %>% ggplot(aes(x = coh_single, y = cor))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+df0 %>% ggplot(aes(x = coh_single, y = rt))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+df0 %>% ggplot(aes(x = coh_single, y = conf,col = as.factor(cor)))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+mod0 = cmdstan_model(here::here("Stanmodels","Bin_RT_discrete_conf_3.stan"))
+
+
+df0$sub = as.numeric(as.factor(df0$sub))
+
+t_p_s = df0 %>% group_by(sub) %>% summarize(n = n())
+
+
+ends <- cumsum(t_p_s$n)
+
+# Calculate the start points
+starts <- c(1, head(ends, -1) + 1)
+
+
+datastan = list(N = nrow(df0),
+              S = length(unique(df0$sub)),
+              starts = starts,
+              minRT = df0 %>% group_by(sub) %>% summarize(minRT = min(rt)) %>% .$minRT,
+              ends = ends,
+              t_p_s = t_p_s$n,
+              X = df0$coh_single,
+              ACC = df0$cor,
+              S_id = df0$sub,
+              RT = df0$rt,
+              conf = df0$conf-3,
+              K = length(unique(df0$conf)),
+              binom_y = df0$cor)
+
+cor0 <-mod0$sample(
+ data = datastan,
+  refresh = 10,
+  iter_sampling = 1000,
+  iter_warmup = 1000,
+  adapt_delta = 0.95,
+  max_treedepth = 12,
+  init  = 0,
+  parallel_chains = 4)
+
+cor0$save_object(here::here("Saved models","Decender2020_discrete_conf_t0.rds"))
+
+
+
+df1 = df %>% filter(t2duration == 1)
+
+df1 %>% ggplot(aes(x = coh_single, y = cor))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+df1 %>% ggplot(aes(x = coh_single, y = rt))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+df1 %>% ggplot(aes(x = coh_single, y = conf,col = as.factor(cor)))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+mod = cmdstan_model(here::here("Stanmodels","Bin_RT_discrete_conf.stan"))
+
+
+df1$sub = as.numeric(as.factor(df1$sub))
+
+t_p_s = df1 %>% group_by(sub) %>% summarize(n = n())
+
+
+ends <- cumsum(t_p_s$n)
+
+# Calculate the start points
+starts <- c(1, head(ends, -1) + 1)
+
+
+datastan = list(N = nrow(df1),
+              S = length(unique(df1$sub)),
+              starts = starts,
+              minRT = df1 %>% group_by(sub) %>% summarize(minRT = min(rt)) %>% .$minRT,
+              ends = ends,
+              t_p_s = t_p_s$n,
+              X = df1$coh_single,
+              ACC = df1$cor,
+              S_id = df1$sub,
+              RT = df1$rt,
+              conf = df1$conf,
+              K = length(unique(df1$conf)),
+              binom_y = df1$cor)
+
+cor1 <-mod$sample(
+ data = datastan,
+  refresh = 10,
+  iter_sampling = 1000,
+  iter_warmup = 1000,
+  adapt_delta = 0.95,
+  max_treedepth = 12,
+  init  = 0,
+  parallel_chains = 4)
+
+cor1$save_object(here::here("Saved models","Decender2020_discrete_conf_t1.rds"))
+
+```
+
+
+```{r}
+
+df = df %>% filter(t2duration == 2)
+
+df %>% ggplot(aes(x = coh_single, y = cor))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+df %>% ggplot(aes(x = coh_single, y = rt))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+df %>% ggplot(aes(x = coh_single, y = conf,col = as.factor(cor)))+
+  geom_jitter(height = 0.1,width = 0.05)+
+  facet_wrap(~sub)
+
+mod = cmdstan_model(here::here("Stanmodels","Bin_RT_discrete_conf.stan"))
+
+
+df$sub = as.numeric(as.factor(df$sub))
+
+t_p_s = df %>% group_by(sub) %>% summarize(n = n())
+
+
+ends <- cumsum(t_p_s$n)
+
+# Calculate the start points
+starts <- c(1, head(ends, -1) + 1)
+
+
+datastan = list(N = nrow(df),
+              S = length(unique(df$sub)),
+              starts = starts,
+              minRT = unique(df %>% group_by(sub) %>% summarize(minRT = min(rt)) %>% .$minRT),
+              ends = ends,
+              t_p_s = t_p_s$n,
+              X = df$coh_single,
+              ACC = df$cor,
+              S_id = df$sub,
+              RT = df$rt,
+              conf = df$conf,
+              K = length(unique(df$conf)),
+              binom_y = df$cor)
+
+cor <-mod$sample(
+ data = datastan,
+  refresh = 10,
+  iter_sampling = 1000,
+  iter_warmup = 1000,
+  adapt_delta = 0.95,
+  max_treedepth = 12,
+  init  = 0,
+  parallel_chains = 4)
+
+cor$save_object(here::here("Saved models","Decender2020_discrete_conf_t2.rds"))
+
+
 
 ```
 

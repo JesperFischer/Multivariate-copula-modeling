@@ -2,7 +2,7 @@ functions {
 
 
   real psycho(real x, real alpha, real beta, real lapse){
-   return (lapse + (1 - 2 * lapse) * (tanh(beta*(x-alpha)) / 2 + 0.5));
+  return (lapse + (1-2*lapse) * inv_logit(beta * (x - alpha)));
   }
 
   real entropy(real p){

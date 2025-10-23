@@ -1,4 +1,10 @@
 
+packages = c("brms","tidyverse","bayesplot","pracma","here","cmdstanr",
+             "patchwork","posterior","HDInterval","loo", "furrr", "SBC","future")
+
+do.call(pacman::p_load, as.list(packages))
+
+
 qord_logit <- function(u, cutpoints) {
   cum_p <- plogis(cutpoints)
 
@@ -69,9 +75,6 @@ sim = function(N,K){
 
 }
 
-
-
-
 fit = function(N,K){
 
   data = sim(N,K)
@@ -100,27 +103,131 @@ fit = function(N,K){
 
 }
 
-fit(50,10)
-
-packages = c("brms","tidyverse","bayesplot","pracma","here",
-             "patchwork","posterior","HDInterval","loo", "furrr", "SBC","future")
-
-do.call(pacman::p_load, as.list(packages))
-
-
-source(here::here("Simulations","Learning","model_recovery_estimation","sim_learn.R"))
-
-cores = 20
-n_sim = 1000
+cores = 10
+n_sim = 100
 plan(multisession, workers = cores)
 
-qq = fitter_ddm(500)
+trials_vec <- seq(50, 300, by = 50)
+K_vec <- 3:10
 
-possfit_model = possibly(.f = fitter_ddm, otherwise = "Error")
+# Create all combinations of trials and K
+param_grid <- expand.grid(trials = trials_vec,
+                          K = K_vec,
+                          sim = 1:n_sim)
 
-results <- future_map(rep(1000,n_sim), ~possfit_model(.x), .options = furrr_options(seed = TRUE), .progress = T)
 
-save.image(here::here("Simulations","Learning","model_recovery_estimation","results","1000_rw_fitter_ddm_1000_samples1.RData"))
+possfit_model = possibly(.f = fit, otherwise = "Error")
 
+results <- future_map2(
+  param_grid$trials, param_grid$K,
+  ~ possfit_model(.x, .y),
+  .options = furrr_options(seed = TRUE),
+  .progress = T
+)
+
+
+save.image(here::here("SBC_ordered_conf","results.RData"))
+
+
+bind_rows(results) %>% ggplot(aes(x = simulated, y = mean, ymin = q5, ymax = q95))+geom_pointrange()+facet_grid(K~N, scales = "free")
+
+
+n_sims <- 1000 # Number of SBC iterations to run
+
+generator <- SBC_generator_function(sim, N = 100, K = 5)
+
+dataset <- generate_datasets(
+  generator,
+  n_sims)
+
+backend <- SBC_backend_cmdstan_sample(
+  cmdstan_model(here::here("tests","tester.stan")),
+  iter_warmup = 1000,
+  iter_sampling = 2000,
+  chains = 4,
+  max_treedepth = 10,
+  parallel_chains = 4,
+  adapt_delta = 0.95)
+
+
+library(future)
+cores = 10
+plan(multisession, workers = cores)
+
+results <- compute_SBC(dataset,
+                       ensure_num_ranks_divisor = 4,
+                       keep_fits = F,
+                       thin_ranks = 20,
+                       #cores_per_fit = 10,
+                       backend)
+save.image(here::here("SBC_ordered_conf","SBC_results_k5.RData"))
+
+
+
+n_sims <- 1000 # Number of SBC iterations to run
+
+generator <- SBC_generator_function(sim, N = 100, K = 10)
+
+dataset <- generate_datasets(
+  generator,
+  n_sims)
+
+backend <- SBC_backend_cmdstan_sample(
+  cmdstan_model(here::here("tests","tester.stan")),
+  iter_warmup = 1000,
+  iter_sampling = 2000,
+  chains = 4,
+  max_treedepth = 10,
+  parallel_chains = 4,
+  adapt_delta = 0.95)
+
+
+library(future)
+cores = 10
+plan(multisession, workers = cores)
+
+results <- compute_SBC(dataset,
+                       ensure_num_ranks_divisor = 4,
+                       keep_fits = F,
+                       thin_ranks = 20,
+                       #cores_per_fit = 10,
+                       backend)
+save.image(here::here("SBC_ordered_conf","SBC_results_k10.RData"))
+
+
+
+
+# remove divergence and max tree depth:
+sim_ids_to_keep <- results$backend_diagnostics %>%
+  dplyr::filter(n_divergent == 0 & n_max_treedepth == 0) %>%
+  dplyr::pull(sim_id)
+
+
+sim_ids_to_exclude <- results$backend_diagnostics %>%
+  dplyr::filter(n_divergent != 0 | n_max_treedepth != 0) %>%
+  dplyr::pull(sim_id)
+
+
+results_subset <- results[sim_ids_to_keep]
+results_excluded <- results[sim_ids_to_exclude]
+
+# also less than 400 effective samples
+
+sim_ids_to_keep <- results_subset$default_diagnostics %>%
+  dplyr::filter(min_ess_bulk  > 400)%>%
+  dplyr::filter(min_ess_tail  > 400) %>%
+  dplyr::pull(sim_id)
+
+
+results_subset <- results_subset[sim_ids_to_keep]
+
+
+plot_rank_hist(results_subset)+facet_wrap(~variable, nrow = 2)+theme_minimal()
+
+
+plot_sim_estimated(results_subset, alpha = 0.5)+
+  facet_wrap(~variable, nrow = 1, scales = "free")+
+  theme_minimal()+
+  theme(strip.text = element_blank())
 
 
